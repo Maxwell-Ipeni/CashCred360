@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
   AlertTriangle,
-  Banknote,
   Bell,
   Building2,
   CheckCircle2,
@@ -10,9 +9,13 @@ import {
   CreditCard,
   FileBarChart2,
   FileText,
+  Eye,
+  EyeOff,
   LayoutDashboard,
   LineChart,
+  LockKeyhole,
   LogOut,
+  Mail,
   Plus,
   ReceiptText,
   RefreshCw,
@@ -112,7 +115,7 @@ function App() {
 
   const query = selectedBusiness ? { business_id: selectedBusiness } : undefined
 
-  async function loadData(nextBusiness = selectedBusiness) {
+  const loadData = useCallback(async (nextBusiness = selectedBusiness) => {
     if (!token) return
     setLoading(true)
     setError('')
@@ -147,16 +150,16 @@ function App() {
         recommendations: recommendations.data,
         credit: credit.data,
       })
-    } catch (err) {
+    } catch {
       setError('Unable to load financial data. Confirm the Laravel API is running and seeded.')
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedBusiness, token])
 
   useEffect(() => {
-    if (token) void loadData(selectedBusiness)
-  }, [token])
+    if (token) void loadData()
+  }, [loadData, token])
 
   function handleLogin(nextToken: string, nextUser: User) {
     localStorage.setItem('cashcred_token', nextToken)
@@ -198,7 +201,6 @@ function App() {
                   value={selectedBusiness}
                   onChange={(event) => {
                     setSelectedBusiness(event.target.value)
-                    void loadData(event.target.value)
                   }}
                 >
                   {data.businesses.map((business) => <option key={business.id} value={business.id}>{business.business_name}</option>)}
@@ -239,6 +241,8 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, user: User) => void 
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [form, setForm] = useState({ name: '', email: 'sme.owner@cashcred.test', password: 'password123', business_name: 'Savanna Office Supplies', sector: 'Wholesale and Retail' })
   const [error, setError] = useState('')
+  const [remember, setRemember] = useState(true)
+  const [showPassword, setShowPassword] = useState(false)
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -254,40 +258,211 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, user: User) => void 
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-8 text-slate-950">
-      <div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-        <section>
-          <div className="mb-8 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-md bg-slate-950 text-white"><Building2 size={24} /></div>
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wider text-blue-700">CashCred360</p>
-              <h1 className="text-4xl font-semibold tracking-normal lg:text-5xl">SME Cashflow & Credit Health Assistant</h1>
+    <div className="min-h-screen overflow-hidden bg-[#f8fbfe] text-slate-950">
+      <div className="mx-auto grid min-h-screen max-w-[1672px] gap-8 px-5 py-7 lg:grid-cols-[minmax(0,1.18fr)_440px] lg:items-center lg:px-16 xl:px-24">
+        <section className="relative hidden min-h-[860px] overflow-hidden rounded-[2rem] bg-[#f8fbfe] lg:block">
+          <div className="absolute -left-24 top-14 h-64 w-64 rounded-full bg-emerald-200/45 blur-3xl" />
+          <div className="absolute left-80 top-0 h-52 w-52 rounded-full bg-sky-100/80 blur-3xl" />
+          <div className="relative z-10 max-w-3xl pt-5">
+            <div className="mb-16 flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#061938] text-white shadow-lg shadow-slate-300/60">
+                <Building2 size={24} />
+              </div>
+              <div>
+                <p className="text-xl font-bold tracking-[0.14em] text-[#0f172a]">CASHCRED360</p>
+                <p className="mt-1 text-sm font-medium text-slate-500">Banking-grade analytics for SMEs</p>
+              </div>
+            </div>
+
+            <h1 className="max-w-2xl text-[4.45rem] font-semibold leading-[0.98] tracking-normal text-[#081629]">
+              SME Cashflow &<br />Credit Health Assistant
+            </h1>
+            <p className="mt-8 max-w-3xl text-[1.08rem] leading-8 text-slate-600">
+              Monitor income, expenses, receivables, loan obligations, repayment capacity, and credit readiness from one banking-grade analytics workspace.
+            </p>
+
+            <div className="mt-10 grid max-w-3xl grid-cols-3 gap-4">
+              <AuthFeature icon={LineChart} title="Cashflow trends" description="Track inflows, outflows and cash position." />
+              <AuthFeature icon={ShieldCheck} title="Credit risk scoring" description="Understand what improves credit health." />
+              <AuthFeature icon={Target} title="Loan readiness" description="Assess eligibility and repayment capacity." />
+            </div>
+
+            <div className="mt-10 grid max-w-3xl grid-cols-[1.1fr_0.9fr] gap-4">
+              <section className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-xl shadow-slate-200/70">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Cashflow Trend</p>
+                    <p className="mt-2 text-2xl font-bold text-[#0f172a]">KES 1,245,000</p>
+                    <p className="mt-1 text-xs font-semibold text-emerald-600">18.6% vs last 30 days</p>
+                  </div>
+                  <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">Net +</div>
+                </div>
+                <AuthCashflowPreview />
+                <div className="mt-4 flex flex-wrap gap-4 text-xs font-medium text-slate-500">
+                  <span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#16a34a]" /> Cash inflow</span>
+                  <span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#dbeafe]" /> Cash outflow</span>
+                  <span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#0f172a]" /> Net cashflow</span>
+                </div>
+              </section>
+
+              <div className="grid gap-4">
+                <section className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-xl shadow-slate-200/70">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Credit Health</p>
+                  <div className="mt-4 flex items-end justify-between">
+                    <div>
+                      <p className="text-5xl font-bold text-[#0f172a]">78</p>
+                      <p className="mt-1 text-sm font-semibold text-emerald-600">Good</p>
+                    </div>
+                    <div className="relative h-20 w-20 rounded-full bg-[conic-gradient(#16a34a_0_78%,#e5e7eb_78%_100%)]">
+                      <div className="absolute inset-2 rounded-full bg-white" />
+                    </div>
+                  </div>
+                </section>
+                <section className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-xl shadow-slate-200/70">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Expense Breakdown</p>
+                  <div className="mt-4 space-y-3 text-sm">
+                    <ExpenseRow label="Stock" value="28%" color="bg-blue-600" />
+                    <ExpenseRow label="Wages" value="19%" color="bg-emerald-600" />
+                    <ExpenseRow label="Rent & utilities" value="10%" color="bg-amber-500" />
+                  </div>
+                </section>
+              </div>
             </div>
           </div>
-          <p className="max-w-2xl text-lg leading-8 text-slate-600">Monitor income, expenses, receivables, loan obligations, repayment capacity, and credit readiness from one banking-grade analytics workspace.</p>
-          <div className="mt-8 grid gap-3 sm:grid-cols-3">
-            <Feature icon={LineChart} label="Cashflow trends" />
-            <Feature icon={ShieldCheck} label="Credit risk scoring" />
-            <Feature icon={Target} label="Loan readiness" />
-          </div>
         </section>
-        <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-5 flex rounded-md bg-slate-100 p-1">
-            <button type="button" onClick={() => setMode('login')} className={`h-10 flex-1 rounded px-3 text-sm font-medium ${mode === 'login' ? 'bg-white shadow-sm' : 'text-slate-600'}`}>Login</button>
-            <button type="button" onClick={() => setMode('register')} className={`h-10 flex-1 rounded px-3 text-sm font-medium ${mode === 'register' ? 'bg-white shadow-sm' : 'text-slate-600'}`}>Register SME</button>
+
+        <form onSubmit={submit} className="mx-auto w-full max-w-[440px] rounded-[1.75rem] border border-slate-200/80 bg-white p-6 shadow-2xl shadow-slate-200/80 sm:p-8">
+          <div className="mb-7 lg:hidden">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#061938] text-white"><Building2 size={22} /></div>
+              <div>
+                <p className="text-lg font-bold tracking-[0.12em] text-[#0f172a]">CASHCRED360</p>
+                <p className="text-xs font-medium text-slate-500">Banking-grade analytics for SMEs</p>
+              </div>
+            </div>
+            <h1 className="text-3xl font-semibold leading-tight tracking-normal text-[#081629]">SME Cashflow & Credit Health Assistant</h1>
           </div>
-          {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-          {mode === 'register' && <Input label="Owner name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} required />}
-          <Input label="Email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} type="email" required />
-          <Input label="Password" value={form.password} onChange={(value) => setForm({ ...form, password: value })} type="password" required />
-          {mode === 'register' && <Input label="Business name" value={form.business_name} onChange={(value) => setForm({ ...form, business_name: value })} required />}
-          {mode === 'register' && <Input label="Sector" value={form.sector} onChange={(value) => setForm({ ...form, sector: value })} required />}
-          <button className="mt-4 h-11 w-full rounded-md bg-blue-700 px-4 text-sm font-semibold text-white" type="submit">{mode === 'login' ? 'Access dashboard' : 'Create SME account'}</button>
-          <div className="mt-4 rounded-md bg-slate-50 p-3 text-sm text-slate-600">
-            Demo SME: sme.owner@cashcred.test / password123<br />Bank admin: bank.admin@cashcred.test / password123
+
+          <div className="mb-6 grid grid-cols-2 rounded-2xl bg-slate-100 p-1.5">
+            <button type="button" onClick={() => setMode('login')} className={`h-12 rounded-xl px-3 text-sm font-bold transition ${mode === 'login' ? 'bg-white text-[#081629] shadow-sm' : 'text-slate-500'}`}>Login</button>
+            <button type="button" onClick={() => setMode('register')} className={`h-12 rounded-xl px-3 text-sm font-bold transition ${mode === 'register' ? 'bg-white text-[#081629] shadow-sm' : 'text-slate-500'}`}>Register SME</button>
+          </div>
+
+          {error && <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
+          {mode === 'register' && <AuthInput label="Owner name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} required />}
+          <AuthInput label="Email" icon={Mail} value={form.email} onChange={(value) => setForm({ ...form, email: value })} type="email" required />
+          <AuthInput
+            label="Password"
+            icon={LockKeyhole}
+            value={form.password}
+            onChange={(value) => setForm({ ...form, password: value })}
+            type={showPassword ? 'text' : 'password'}
+            trailing={
+              <button
+                type="button"
+                className="-mr-2 flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            }
+            required
+          />
+          {mode === 'register' && <AuthInput label="Business name" value={form.business_name} onChange={(value) => setForm({ ...form, business_name: value })} required />}
+          {mode === 'register' && <AuthInput label="Sector" value={form.sector} onChange={(value) => setForm({ ...form, sector: value })} required />}
+
+          <div className="mt-2 flex items-center justify-between text-sm">
+            <label className="inline-flex items-center gap-2 font-medium text-slate-600">
+              <input className="h-4 w-4 rounded border-slate-300 text-blue-700" checked={remember} onChange={(event) => setRemember(event.target.checked)} type="checkbox" />
+              Remember me
+            </label>
+            <button className="font-semibold text-blue-700" type="button">Forgot password?</button>
+          </div>
+
+          <button className="mt-6 h-12 w-full rounded-2xl bg-[#0b63f6] px-4 text-sm font-bold text-white shadow-lg shadow-blue-200 transition hover:bg-[#0758df]" type="submit">
+            {mode === 'login' ? 'Access dashboard' : 'Create SME account'}
+          </button>
+
+          <div className="my-6 flex items-center gap-4 text-sm font-medium text-slate-400">
+            <span className="h-px flex-1 bg-slate-200" />
+            or
+            <span className="h-px flex-1 bg-slate-200" />
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
+            <p><span className="font-semibold text-slate-800">Demo SME:</span> sme.owner@cashcred.test / password123</p>
+            <p><span className="font-semibold text-slate-800">Bank admin:</span> bank.admin@cashcred.test / password123</p>
+          </div>
+
+          <div className="mt-5 flex items-start gap-3 rounded-2xl bg-emerald-50 px-4 py-4 text-sm leading-6 text-slate-600">
+            <ShieldCheck className="mt-0.5 shrink-0 text-emerald-600" size={19} />
+            <p>Your data is encrypted and secure with enterprise-grade protection.</p>
           </div>
         </form>
       </div>
+    </div>
+  )
+}
+
+function AuthCashflowPreview() {
+  const groups = [
+    { inflow: 46, outflow: 26, net: 18 },
+    { inflow: 66, outflow: 39, net: 31 },
+    { inflow: 57, outflow: 34, net: 24 },
+    { inflow: 84, outflow: 47, net: 42 },
+    { inflow: 71, outflow: 42, net: 35 },
+    { inflow: 104, outflow: 56, net: 55 },
+    { inflow: 91, outflow: 48, net: 47 },
+  ]
+
+  return (
+    <div className="mt-7 h-32 border-b border-slate-100 pb-2">
+      <svg className="h-full w-full overflow-visible" viewBox="0 0 420 128" role="img" aria-label="Cashflow trend preview">
+        <line x1="0" x2="420" y1="124" y2="124" stroke="#e2e8f0" strokeWidth="1" />
+        {groups.map((group, index) => {
+          const x = 16 + index * 57
+          return (
+            <g key={index}>
+              <rect x={x} y={124 - group.outflow} width="13" height={group.outflow} rx="4" fill="#dbeafe" />
+              <rect x={x + 17} y={124 - group.inflow} width="13" height={group.inflow} rx="4" fill="#16a34a" />
+              <rect x={x + 34} y={124 - group.net} width="13" height={group.net} rx="4" fill="#0f172a" />
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+function AuthFeature({ icon: Icon, title, description }: { icon: typeof LineChart; title: string; description: string }) {
+  return (
+    <div className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-lg shadow-slate-200/60">
+      <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Icon size={20} /></div>
+      <h3 className="text-sm font-bold text-[#0f172a]">{title}</h3>
+      <p className="mt-2 text-xs leading-5 text-slate-500">{description}</p>
+    </div>
+  )
+}
+
+function AuthInput({ label, value, onChange, icon: Icon, trailing, type = 'text', required = false }: { label: string; value: string; onChange: (value: string) => void; icon?: typeof Mail; trailing?: ReactNode; type?: string; required?: boolean }) {
+  return (
+    <label className="mb-4 block text-sm font-bold text-slate-700">
+      {label}
+      <span className="mt-2 flex h-12 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 shadow-sm shadow-slate-100 focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100">
+        {Icon && <Icon className="shrink-0 text-slate-400" size={18} />}
+        <input className="h-full min-w-0 flex-1 border-0 bg-transparent text-sm font-medium text-slate-900 outline-none placeholder:text-slate-400" value={value} onChange={(event) => onChange(event.target.value)} type={type} required={required} />
+        {trailing}
+      </span>
+    </label>
+  )
+}
+
+function ExpenseRow({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs font-semibold text-slate-600"><span>{label}</span><span>{value}</span></div>
+      <div className="h-2 rounded-full bg-slate-100"><div className={`h-2 rounded-full ${color}`} style={{ width: value }} /></div>
     </div>
   )
 }
@@ -508,10 +683,6 @@ function DataTable({ headers, rows }: { headers: string[]; rows: (string | numbe
   return <div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b border-slate-200 text-slate-500">{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-medium">{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} className="border-b border-slate-100 last:border-0">{row.map((cell, cellIndex) => <td key={cellIndex} className="whitespace-nowrap px-3 py-3">{cell}</td>)}</tr>)}</tbody></table></div>
 }
 
-function Input({ label, value, onChange, type = 'text', required = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; required?: boolean }) {
-  return <label className="mb-3 block text-sm font-medium text-slate-700">{label}<input className="mt-1 h-11 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" value={value} onChange={(event) => onChange(event.target.value)} type={type} required={required} /></label>
-}
-
 function SmallInput({ value, onChange, placeholder, type = 'text' }: { value: string; onChange: (value: string) => void; placeholder?: string; type?: string }) {
   return <input className="h-10 min-w-36 rounded-md border border-slate-300 px-3 text-sm" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} type={type} required />
 }
@@ -539,10 +710,6 @@ function RiskBadge({ risk }: { risk: string }) {
 
 function Insight({ title, description }: { title: string; description: string }) {
   return <div className="rounded-lg border border-slate-200 bg-slate-50 p-4"><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm leading-6 text-slate-600">{description}</p></div>
-}
-
-function Feature({ icon: Icon, label }: { icon: typeof Banknote; label: string }) {
-  return <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><Icon className="text-blue-700" size={20} /><span className="text-sm font-medium">{label}</span></div>
 }
 
 function EmptyState({ label }: { label: string }) {
