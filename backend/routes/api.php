@@ -21,6 +21,7 @@ Route::middleware('jwt')->group(function () {
     Route::get('/dashboard/income-vs-expenses', [DashboardController::class, 'incomeVsExpenses']);
     Route::get('/dashboard/loan-progress', [DashboardController::class, 'loanProgress']);
     Route::get('/credit-health', [DashboardController::class, 'creditHealth']);
+    Route::get('/reports/dashboard', [DashboardController::class, 'report']);
 
     Route::get('/transactions', [ResourceController::class, 'transactions']);
     Route::post('/transactions', [ResourceController::class, 'storeTransaction']);

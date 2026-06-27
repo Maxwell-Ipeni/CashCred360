@@ -22,7 +22,9 @@ class ResourceController extends Controller
 
     public function transactions(Request $request)
     {
-        return response()->json($this->scope->resolve($request)->transactions()->latest('transaction_date')->get());
+        $business = $this->scope->resolve($request);
+        $query = $this->applyDateRange($business->transactions(), 'transaction_date', $this->filters($request));
+        return response()->json($query->latest('transaction_date')->get());
     }
 
     public function storeTransaction(Request $request)
@@ -61,7 +63,12 @@ class ResourceController extends Controller
         return response()->json(['message' => 'Transaction deleted']);
     }
 
-    public function invoices(Request $request) { return response()->json($this->scope->resolve($request)->invoices()->latest('due_date')->get()); }
+    public function invoices(Request $request)
+    {
+        $business = $this->scope->resolve($request);
+        $query = $this->applyDateRange($business->invoices(), 'due_date', $this->filters($request));
+        return response()->json($query->latest('due_date')->get());
+    }
 
     public function storeInvoice(Request $request)
     {
@@ -99,7 +106,12 @@ class ResourceController extends Controller
         return response()->json(['message' => 'Invoice deleted']);
     }
 
-    public function loans(Request $request) { return response()->json($this->scope->resolve($request)->loans()->latest()->get()); }
+    public function loans(Request $request)
+    {
+        $business = $this->scope->resolve($request);
+        $query = $this->applyDateRange($business->loans(), 'next_due_date', $this->filters($request));
+        return response()->json($query->latest('next_due_date')->get());
+    }
 
     public function storeLoan(Request $request)
     {
@@ -141,8 +153,19 @@ class ResourceController extends Controller
         return response()->json(['message' => 'Loan deleted']);
     }
 
-    public function alerts(Request $request) { return response()->json($this->scope->resolve($request)->alerts()->latest()->get()); }
-    public function recommendations(Request $request) { return response()->json($this->scope->resolve($request)->recommendations()->latest()->get()); }
+    public function alerts(Request $request)
+    {
+        $business = $this->scope->resolve($request);
+        $query = $this->applyDateRange($business->alerts(), 'created_at', $this->filters($request));
+        return response()->json($query->latest()->get());
+    }
+
+    public function recommendations(Request $request)
+    {
+        $business = $this->scope->resolve($request);
+        $query = $this->applyDateRange($business->recommendations(), 'created_at', $this->filters($request));
+        return response()->json($query->latest()->get());
+    }
 
     public function updateAlert(Request $request, Alert $alert)
     {
@@ -156,6 +179,25 @@ class ResourceController extends Controller
         $this->authorizeBusiness($request, $recommendation->business_profile_id);
         $recommendation->update($request->validate(['is_completed' => ['required', 'boolean']]));
         return response()->json($recommendation);
+    }
+
+    private function filters(Request $request)
+    {
+        return $request->validate([
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+        ]);
+    }
+
+    private function applyDateRange($query, string $column, array $filters)
+    {
+        if (!empty($filters['date_from'])) {
+            $query->whereDate($column, '>=', $filters['date_from']);
+        }
+        if (!empty($filters['date_to'])) {
+            $query->whereDate($column, '<=', $filters['date_to']);
+        }
+        return $query;
     }
 
     private function authorizeBusiness(Request $request, $businessId)

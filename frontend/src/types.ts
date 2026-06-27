@@ -17,6 +17,12 @@ export type BusinessProfile = {
   risk_class?: string
 }
 
+export type SummaryDelta = {
+  value: number
+  label: string
+  direction: 'up' | 'down' | 'flat'
+}
+
 export type Summary = {
   business?: BusinessProfile
   total_income: number
@@ -28,6 +34,7 @@ export type Summary = {
   risk_class: string
   unread_alerts: number
   open_receivables: number
+  deltas?: Partial<Record<'cashflow_balance' | 'total_income' | 'total_expenses' | 'net_profit' | 'credit_health_score', SummaryDelta>>
 }
 
 export type TrendPoint = { month: string; income: number; expenses: number; net_cashflow: number }

@@ -7,13 +7,14 @@ use Carbon\Carbon;
 
 class CreditHealthService
 {
-    public function evaluate(BusinessProfile $business)
+    public function evaluate(BusinessProfile $business, array $filters = [])
     {
-        $transactions = $business->transactions()->where('transaction_date', '>=', Carbon::now()->subMonths(6)->startOfMonth())->get();
+        [$start, $end] = $this->window($business, $filters);
+        $transactions = $business->transactions()->whereBetween('transaction_date', [$start, $end])->get();
         $income = $transactions->where('type', 'income')->sum('amount');
         $expenses = $transactions->where('type', 'expense')->sum('amount');
         $profit = $income - $expenses;
-        $monthly = $this->monthlySeries($transactions);
+        $monthly = $this->monthlySeries($transactions, $start, $end);
 
         $incomeConsistency = $this->incomeConsistency($monthly);
         $expenseControl = $income > 0 ? max(0, min(100, 100 - (($expenses / max($income, 1)) * 70))) : 20;
@@ -37,21 +38,36 @@ class CreditHealthService
                 'profit_trend' => round($profitTrend),
             ],
             'summary' => [
-                'six_month_income' => round($income, 2),
-                'six_month_expenses' => round($expenses, 2),
-                'six_month_profit' => round($profit, 2),
+                'twelve_month_income' => round($income, 2),
+                'twelve_month_expenses' => round($expenses, 2),
+                'twelve_month_profit' => round($profit, 2),
                 'outstanding_loans' => round($business->loans()->sum('outstanding_balance'), 2),
             ],
             'recommendations' => $this->recommendations($business, $score, $income, $expenses, $profit),
         ];
     }
 
-    private function monthlySeries($transactions)
+    private function window(BusinessProfile $business, array $filters)
+    {
+        $latestDate = $business->transactions()->max('transaction_date');
+        $defaultEnd = $latestDate ? Carbon::parse($latestDate)->endOfDay() : Carbon::now()->endOfDay();
+        $end = !empty($filters['date_to']) ? Carbon::parse($filters['date_to'])->endOfDay() : $defaultEnd;
+        $start = !empty($filters['date_from']) ? Carbon::parse($filters['date_from'])->startOfDay() : $end->copy()->subMonths(11)->startOfMonth();
+        if ($end->lt($start)) {
+            $end = $start->copy()->endOfDay();
+        }
+        return [$start, $end];
+    }
+
+    private function monthlySeries($transactions, Carbon $start, Carbon $end)
     {
         $series = [];
-        for ($i = 5; $i >= 0; $i--) {
-            $key = Carbon::now()->subMonths($i)->format('Y-m');
+        $month = $start->copy()->startOfMonth();
+        $lastMonth = $end->copy()->startOfMonth();
+        while ($month->lte($lastMonth) && count($series) < 12) {
+            $key = $month->format('Y-m');
             $series[$key] = ['income' => 0, 'expenses' => 0, 'profit' => 0];
+            $month->addMonth();
         }
 
         foreach ($transactions as $transaction) {
