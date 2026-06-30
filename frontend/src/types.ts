@@ -1,13 +1,46 @@
+export type TenantSettings = {
+  display_name?: string | null
+  logo_path?: string | null
+  favicon_path?: string | null
+  background_image_path?: string | null
+  primary_color: string
+  secondary_color: string
+  accent_color: string
+  theme_mode: 'light' | 'dark'
+  enabled_features: string[]
+  enabled_widgets: string[]
+  widget_order: string[]
+}
+
+export type Tenant = {
+  id: number
+  name: string
+  slug: string
+  status: string
+  settings?: TenantSettings | null
+  branches?: Branch[]
+}
+
+export type Branch = { id: number; tenant_id: number; name: string; code?: string | null; location?: string | null; status: string }
+export type Role = { id: number; tenant_id: number; name: string; slug: string; permissions?: { key: string; name: string; group?: string }[] }
+export type TenantMembership = { id?: number; tenant_id: number; branch_id?: number | null; status: string; tenant?: Tenant; branch?: Branch | null; role?: Role | null; user?: User }
+
 export type User = {
   id: number
   name: string
   email: string
-  role: 'sme' | 'bank_admin' | 'admin'
+  role: 'sme' | 'bank_admin' | 'admin' | 'super_admin'
   business_profile?: BusinessProfile | null
+  permissions?: string[]
+  active_tenant?: Tenant | null
+  active_branch?: Branch | null
+  memberships?: TenantMembership[]
 }
 
 export type BusinessProfile = {
   id: number
+  tenant_id?: number
+  branch_id?: number
   user_id?: number
   business_name: string
   sector?: string
@@ -15,6 +48,7 @@ export type BusinessProfile = {
   owner?: string
   credit_health_score?: number
   risk_class?: string
+  tenant?: Tenant | null
 }
 
 export type SummaryDelta = {

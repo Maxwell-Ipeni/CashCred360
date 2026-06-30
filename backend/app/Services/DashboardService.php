@@ -29,7 +29,7 @@ class DashboardService
         $previous = $this->previousSummaryMetrics($business, $filters);
 
         return [
-            'business' => $business->load('user'),
+            'business' => $business->load(['user', 'tenant.settings', 'tenant.branches']),
             'total_income' => round($income, 2),
             'total_expenses' => round($expenses, 2),
             'net_profit' => round($netProfit, 2),
@@ -90,10 +90,11 @@ class DashboardService
         $previousFilters = [
             'date_from' => $previousStart->toDateString(),
             'date_to' => $previousEnd->toDateString(),
+            '_branch_id' => $filters['_branch_id'] ?? null,
         ];
 
-        $income = $business->transactions()->where('type', 'income')->whereBetween('transaction_date', [$previousStart, $previousEnd])->sum('amount');
-        $expenses = $business->transactions()->where('type', 'expense')->whereBetween('transaction_date', [$previousStart, $previousEnd])->sum('amount');
+        $income = $this->applyDateRange($business->transactions()->where('type', 'income'), 'transaction_date', $previousFilters)->sum('amount');
+        $expenses = $this->applyDateRange($business->transactions()->where('type', 'expense'), 'transaction_date', $previousFilters)->sum('amount');
         $installments = $this->applyDateRange($business->loans(), 'next_due_date', $previousFilters)->sum('monthly_installment');
         $credit = $this->creditHealth->evaluate($business, $previousFilters);
         $netProfit = $income - $expenses;
@@ -170,6 +171,9 @@ class DashboardService
         if (!empty($filters['date_to'])) {
             $query->whereDate($column, '<=', $filters['date_to']);
         }
+        if (!empty($filters['_branch_id'])) {
+            $query->where('branch_id', $filters['_branch_id']);
+        }
         return $query;
     }
 
@@ -187,8 +191,9 @@ class DashboardService
             if (!empty($filters['date_to'])) {
                 $end = $end->min(Carbon::parse($filters['date_to'])->endOfDay());
             }
-            $income = $business->transactions()->where('type', 'income')->whereBetween('transaction_date', [$start, $end])->sum('amount');
-            $expenses = $business->transactions()->where('type', 'expense')->whereBetween('transaction_date', [$start, $end])->sum('amount');
+            $periodFilters = ['date_from' => $start->toDateString(), 'date_to' => $end->toDateString(), '_branch_id' => $filters['_branch_id'] ?? null];
+            $income = $this->applyDateRange($business->transactions()->where('type', 'income'), 'transaction_date', $periodFilters)->sum('amount');
+            $expenses = $this->applyDateRange($business->transactions()->where('type', 'expense'), 'transaction_date', $periodFilters)->sum('amount');
             $rows[] = [
                 'month' => $date->format('M j'),
                 'income' => round($income, 2),

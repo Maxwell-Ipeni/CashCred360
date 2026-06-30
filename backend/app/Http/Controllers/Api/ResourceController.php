@@ -23,7 +23,8 @@ class ResourceController extends Controller
     public function transactions(Request $request)
     {
         $business = $this->scope->resolve($request);
-        $query = $this->applyDateRange($business->transactions(), 'transaction_date', $this->filters($request));
+        $query = $this->scope->applyRecordScope($request, $business->transactions());
+        $query = $this->applyDateRange($query, 'transaction_date', $this->filters($request));
         return response()->json($query->latest('transaction_date')->get());
     }
 
@@ -37,14 +38,15 @@ class ResourceController extends Controller
             'amount' => ['required', 'numeric', 'min:0.01'],
             'transaction_date' => ['required', 'date'],
             'status' => ['nullable', Rule::in(['pending', 'cleared'])],
+            'branch_id' => ['nullable', 'integer'],
         ]);
-        $data['business_profile_id'] = $business->id;
+        $data = array_merge($data, $this->scope->recordOwnership($request, $business));
         return response()->json(Transaction::create($data), 201);
     }
 
     public function updateTransaction(Request $request, Transaction $transaction)
     {
-        $this->authorizeBusiness($request, $transaction->business_profile_id);
+        $this->authorizeRecord($request, $transaction);
         $transaction->update($request->validate([
             'type' => ['sometimes', Rule::in(['income', 'expense'])],
             'category' => ['sometimes', 'string', 'max:120'],
@@ -58,7 +60,7 @@ class ResourceController extends Controller
 
     public function destroyTransaction(Request $request, Transaction $transaction)
     {
-        $this->authorizeBusiness($request, $transaction->business_profile_id);
+        $this->authorizeRecord($request, $transaction);
         $transaction->delete();
         return response()->json(['message' => 'Transaction deleted']);
     }
@@ -66,7 +68,8 @@ class ResourceController extends Controller
     public function invoices(Request $request)
     {
         $business = $this->scope->resolve($request);
-        $query = $this->applyDateRange($business->invoices(), 'due_date', $this->filters($request));
+        $query = $this->scope->applyRecordScope($request, $business->invoices());
+        $query = $this->applyDateRange($query, 'due_date', $this->filters($request));
         return response()->json($query->latest('due_date')->get());
     }
 
@@ -80,15 +83,16 @@ class ResourceController extends Controller
             'issue_date' => ['required', 'date'],
             'due_date' => ['required', 'date'],
             'status' => ['nullable', Rule::in(['draft', 'sent', 'paid', 'overdue'])],
+            'branch_id' => ['nullable', 'integer'],
         ]);
-        $data['business_profile_id'] = $business->id;
+        $data = array_merge($data, $this->scope->recordOwnership($request, $business));
         $data['invoice_number'] = $data['invoice_number'] ?? 'INV-'.Str::upper(Str::random(8));
         return response()->json(Invoice::create($data), 201);
     }
 
     public function updateInvoice(Request $request, Invoice $invoice)
     {
-        $this->authorizeBusiness($request, $invoice->business_profile_id);
+        $this->authorizeRecord($request, $invoice);
         $invoice->update($request->validate([
             'customer_name' => ['sometimes', 'string', 'max:160'],
             'amount' => ['sometimes', 'numeric', 'min:0.01'],
@@ -101,7 +105,7 @@ class ResourceController extends Controller
 
     public function destroyInvoice(Request $request, Invoice $invoice)
     {
-        $this->authorizeBusiness($request, $invoice->business_profile_id);
+        $this->authorizeRecord($request, $invoice);
         $invoice->delete();
         return response()->json(['message' => 'Invoice deleted']);
     }
@@ -109,7 +113,8 @@ class ResourceController extends Controller
     public function loans(Request $request)
     {
         $business = $this->scope->resolve($request);
-        $query = $this->applyDateRange($business->loans(), 'next_due_date', $this->filters($request));
+        $query = $this->scope->applyRecordScope($request, $business->loans());
+        $query = $this->applyDateRange($query, 'next_due_date', $this->filters($request));
         return response()->json($query->latest('next_due_date')->get());
     }
 
@@ -125,14 +130,15 @@ class ResourceController extends Controller
             'next_due_date' => ['nullable', 'date'],
             'repayment_progress' => ['nullable', 'integer', 'min:0', 'max:100'],
             'status' => ['nullable', Rule::in(['current', 'late', 'restructured', 'closed'])],
+            'branch_id' => ['nullable', 'integer'],
         ]);
-        $data['business_profile_id'] = $business->id;
+        $data = array_merge($data, $this->scope->recordOwnership($request, $business));
         return response()->json(Loan::create($data), 201);
     }
 
     public function updateLoan(Request $request, Loan $loan)
     {
-        $this->authorizeBusiness($request, $loan->business_profile_id);
+        $this->authorizeRecord($request, $loan);
         $loan->update($request->validate([
             'lender' => ['sometimes', 'string', 'max:160'],
             'product_name' => ['nullable', 'string', 'max:160'],
@@ -148,7 +154,7 @@ class ResourceController extends Controller
 
     public function destroyLoan(Request $request, Loan $loan)
     {
-        $this->authorizeBusiness($request, $loan->business_profile_id);
+        $this->authorizeRecord($request, $loan);
         $loan->delete();
         return response()->json(['message' => 'Loan deleted']);
     }
@@ -156,27 +162,29 @@ class ResourceController extends Controller
     public function alerts(Request $request)
     {
         $business = $this->scope->resolve($request);
-        $query = $this->applyDateRange($business->alerts(), 'created_at', $this->filters($request));
+        $query = $this->scope->applyRecordScope($request, $business->alerts());
+        $query = $this->applyDateRange($query, 'created_at', $this->filters($request));
         return response()->json($query->latest()->get());
     }
 
     public function recommendations(Request $request)
     {
         $business = $this->scope->resolve($request);
-        $query = $this->applyDateRange($business->recommendations(), 'created_at', $this->filters($request));
+        $query = $this->scope->applyRecordScope($request, $business->recommendations());
+        $query = $this->applyDateRange($query, 'created_at', $this->filters($request));
         return response()->json($query->latest()->get());
     }
 
     public function updateAlert(Request $request, Alert $alert)
     {
-        $this->authorizeBusiness($request, $alert->business_profile_id);
+        $this->authorizeRecord($request, $alert);
         $alert->update($request->validate(['is_read' => ['required', 'boolean']]));
         return response()->json($alert);
     }
 
     public function updateRecommendation(Request $request, Recommendation $recommendation)
     {
-        $this->authorizeBusiness($request, $recommendation->business_profile_id);
+        $this->authorizeRecord($request, $recommendation);
         $recommendation->update($request->validate(['is_completed' => ['required', 'boolean']]));
         return response()->json($recommendation);
     }
@@ -186,6 +194,7 @@ class ResourceController extends Controller
         return $request->validate([
             'date_from' => ['nullable', 'date'],
             'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'branch_id' => ['nullable', 'integer'],
         ]);
     }
 
@@ -200,15 +209,18 @@ class ResourceController extends Controller
         return $query;
     }
 
-    private function authorizeBusiness(Request $request, $businessId)
+    private function authorizeRecord(Request $request, $record)
     {
-        $user = $request->attributes->get('auth_user');
-        if ($user->isAdmin()) {
-            return true;
-        }
-        if (!$user->businessProfile || (int) $user->businessProfile->id !== (int) $businessId) {
+        $business = $this->scope->resolve($request);
+        if ((int) $record->business_profile_id !== (int) $business->id || (int) $record->tenant_id !== (int) $business->tenant_id) {
             abort(403, 'Forbidden');
         }
+
+        $branchId = $this->scope->branchId($request);
+        if ($branchId && (int) $record->branch_id !== (int) $branchId) {
+            abort(403, 'Forbidden');
+        }
+
         return true;
     }
 }

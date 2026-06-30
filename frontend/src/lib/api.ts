@@ -12,5 +12,16 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  const storedUser = localStorage.getItem('cashcred_user')
+  if (storedUser) {
+    try {
+      const user = JSON.parse(storedUser) as { role?: string; active_tenant?: { id?: number } | null }
+      if (!['super_admin', 'bank_admin', 'admin'].includes(user.role || '') && user.active_tenant?.id) {
+        config.headers['X-Tenant-Id'] = String(user.active_tenant.id)
+      }
+    } catch {
+      localStorage.removeItem('cashcred_user')
+    }
+  }
   return config
 })
