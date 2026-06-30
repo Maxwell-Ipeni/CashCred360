@@ -9,10 +9,12 @@ class BusinessProfile extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['user_id', 'business_name', 'sector', 'registration_number', 'location', 'cash_reserve_target'];
+    protected $fillable = ['tenant_id', 'branch_id', 'user_id', 'business_name', 'sector', 'registration_number', 'location', 'cash_reserve_target'];
     protected $casts = ['cash_reserve_target' => 'float'];
 
     public function user() { return $this->belongsTo(User::class); }
+    public function tenant() { return $this->belongsTo(Tenant::class); }
+    public function branch() { return $this->belongsTo(Branch::class); }
     public function transactions() { return $this->hasMany(Transaction::class); }
     public function invoices() { return $this->hasMany(Invoice::class); }
     public function loans() { return $this->hasMany(Loan::class); }

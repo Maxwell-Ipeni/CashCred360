@@ -130,9 +130,12 @@ class DashboardController extends Controller
 
     private function filters(Request $request)
     {
-        return $request->validate([
+        $filters = $request->validate([
             'date_from' => ['nullable', 'date'],
             'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'branch_id' => ['nullable', 'integer'],
         ]);
+        $filters['_branch_id'] = $this->scope->branchId($request);
+        return $filters;
     }
 }

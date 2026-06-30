@@ -18,16 +18,19 @@ class BusinessController extends Controller
 
     public function index(Request $request)
     {
-        $businesses = $this->scope->query($request)->with('user')->get()->map(function ($business) {
+        $businesses = $this->scope->query($request)->with(['user', 'tenant.settings', 'tenant.branches'])->get()->map(function ($business) {
             $credit = $this->creditHealth->evaluate($business);
             return [
                 'id' => $business->id,
+                'tenant_id' => $business->tenant_id,
+                'branch_id' => $business->branch_id,
                 'business_name' => $business->business_name,
                 'sector' => $business->sector,
                 'location' => $business->location,
                 'owner' => $business->user ? $business->user->name : null,
                 'credit_health_score' => $credit['score'],
                 'risk_class' => $credit['risk_class'],
+                'tenant' => $business->tenant,
             ];
         });
 

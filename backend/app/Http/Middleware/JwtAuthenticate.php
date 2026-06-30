@@ -25,7 +25,7 @@ class JwtAuthenticate
             return response()->json(['message' => 'Invalid or expired token'], 401);
         }
 
-        $user = User::with('businessProfile')->find($payload['sub']);
+        $user = User::with(['businessProfile', 'tenantMemberships.tenant.settings', 'tenantMemberships.role.permissions', 'tenantMemberships.branch'])->find($payload['sub']);
         if (!$user) {
             return response()->json(['message' => 'User not found'], 401);
         }

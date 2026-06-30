@@ -10,7 +10,7 @@ class CreditHealthService
     public function evaluate(BusinessProfile $business, array $filters = [])
     {
         [$start, $end] = $this->window($business, $filters);
-        $transactions = $business->transactions()->whereBetween('transaction_date', [$start, $end])->get();
+        $transactions = $this->applyBranch($business->transactions()->whereBetween('transaction_date', [$start, $end]), $filters)->get();
         $income = $transactions->where('type', 'income')->sum('amount');
         $expenses = $transactions->where('type', 'expense')->sum('amount');
         $profit = $income - $expenses;
@@ -19,8 +19,8 @@ class CreditHealthService
         $incomeConsistency = $this->incomeConsistency($monthly);
         $expenseControl = $income > 0 ? max(0, min(100, 100 - (($expenses / max($income, 1)) * 70))) : 20;
         $cashflowStability = $this->cashflowStability($monthly);
-        $repaymentHistory = $this->repaymentHistory($business);
-        $obligations = $this->obligationScore($business, $income);
+        $repaymentHistory = $this->repaymentHistory($business, $filters);
+        $obligations = $this->obligationScore($business, $income, $filters);
         $profitTrend = $this->profitTrend($monthly);
 
         $score = round(($incomeConsistency * 0.2) + ($expenseControl * 0.2) + ($cashflowStability * 0.2) + ($repaymentHistory * 0.15) + ($obligations * 0.15) + ($profitTrend * 0.1));
@@ -41,9 +41,9 @@ class CreditHealthService
                 'twelve_month_income' => round($income, 2),
                 'twelve_month_expenses' => round($expenses, 2),
                 'twelve_month_profit' => round($profit, 2),
-                'outstanding_loans' => round($business->loans()->sum('outstanding_balance'), 2),
+                'outstanding_loans' => round($this->applyBranch($business->loans(), $filters)->sum('outstanding_balance'), 2),
             ],
-            'recommendations' => $this->recommendations($business, $score, $income, $expenses, $profit),
+            'recommendations' => $this->recommendations($business, $score, $income, $expenses, $profit, $filters),
         ];
     }
 
@@ -86,6 +86,15 @@ class CreditHealthService
         return array_values($series);
     }
 
+
+    private function applyBranch($query, array $filters)
+    {
+        if (!empty($filters['_branch_id'])) {
+            $query->where('branch_id', $filters['_branch_id']);
+        }
+        return $query;
+    }
+
     private function incomeConsistency($monthly)
     {
         $incomes = array_values(array_filter(array_column($monthly, 'income'), function ($value) { return $value > 0; }));
@@ -112,9 +121,9 @@ class CreditHealthService
         return ($positiveMonths / max(count($monthly), 1)) * 100;
     }
 
-    private function repaymentHistory(BusinessProfile $business)
+    private function repaymentHistory(BusinessProfile $business, array $filters)
     {
-        $loans = $business->loans()->get();
+        $loans = $this->applyBranch($business->loans(), $filters)->get();
         if ($loans->count() === 0) {
             return 85;
         }
@@ -123,9 +132,9 @@ class CreditHealthService
         return max(20, 100 - ($late * 25) - ($restructured * 15));
     }
 
-    private function obligationScore(BusinessProfile $business, $income)
+    private function obligationScore(BusinessProfile $business, $income, array $filters)
     {
-        $outstanding = $business->loans()->sum('outstanding_balance');
+        $outstanding = $this->applyBranch($business->loans(), $filters)->sum('outstanding_balance');
         if ($outstanding <= 0) {
             return 90;
         }
@@ -145,13 +154,13 @@ class CreditHealthService
         return max(25, 70 + (($lastAvg - $firstAvg) / max(abs($firstAvg), 1) * 40));
     }
 
-    private function recommendations(BusinessProfile $business, $score, $income, $expenses, $profit)
+    private function recommendations(BusinessProfile $business, $score, $income, $expenses, $profit, array $filters)
     {
         $items = [];
         if ($expenses > ($income * 0.72)) {
             $items[] = ['title' => 'Reduce operating expense pressure', 'description' => 'Review supplier costs, non-essential spend, and high-frequency expenses to bring expense ratio below 70% of income.'];
         }
-        if ($business->invoices()->whereIn('status', ['sent', 'overdue'])->sum('amount') > ($income * 0.18)) {
+        if ($this->applyBranch($business->invoices()->whereIn('status', ['sent', 'overdue']), $filters)->sum('amount') > ($income * 0.18)) {
             $items[] = ['title' => 'Improve receivables collection', 'description' => 'Prioritize overdue invoices and shorten payment terms for repeat customers to stabilize monthly cash inflow.'];
         }
         if ($profit < ($income * 0.15)) {

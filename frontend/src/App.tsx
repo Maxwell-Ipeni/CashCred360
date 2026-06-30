@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -45,13 +45,18 @@ import { api } from './lib/api'
 import type {
   Alert,
   BreakdownPoint,
+  Branch,
   BusinessProfile,
   CreditHealth,
   Invoice,
   Loan,
   LoanProgress,
   Recommendation,
+  Role,
   Summary,
+  Tenant,
+  TenantMembership,
+  TenantSettings,
   Transaction,
   TrendPoint,
   User,
@@ -79,7 +84,7 @@ function categoriesFor(type: string) {
   return type === 'expense' ? expenseCategories : incomeCategories
 }
 
-type ViewKey = 'dashboard' | 'transactions' | 'expenses' | 'invoices' | 'loans' | 'credit' | 'alerts' | 'reports' | 'recommendations'
+type ViewKey = 'dashboard' | 'transactions' | 'expenses' | 'invoices' | 'loans' | 'credit' | 'alerts' | 'reports' | 'recommendations' | 'tenant_admin' | 'admin'
 type DateFilters = typeof defaultFilters
 
 type AppData = {
@@ -120,7 +125,35 @@ const navItems: { key: ViewKey; label: string; icon: typeof LayoutDashboard }[] 
   { key: 'reports', label: 'Reports', icon: FileBarChart2 },
   { key: 'alerts', label: 'Insights & Alerts', icon: Bell },
   { key: 'recommendations', label: 'Recommendations', icon: Target },
+  { key: 'admin', label: 'System Admin', icon: Building2 },
 ]
+
+const viewPermissions: Partial<Record<ViewKey, string>> = {
+  dashboard: 'dashboard.view',
+  transactions: 'transactions.view',
+  expenses: 'transactions.view',
+  invoices: 'invoices.view',
+  loans: 'loans.view',
+  credit: 'dashboard.view',
+  reports: 'reports.download',
+  alerts: 'alerts.view',
+  recommendations: 'recommendations.view',
+}
+
+const featureForView: Partial<Record<ViewKey, string>> = {
+  dashboard: 'dashboard',
+  transactions: 'transactions',
+  expenses: 'expenses',
+  invoices: 'invoices',
+  loans: 'loans',
+  credit: 'credit',
+  reports: 'reports',
+  alerts: 'alerts',
+  recommendations: 'recommendations',
+}
+
+const manageableFeatures = ['dashboard', 'transactions', 'expenses', 'invoices', 'loans', 'credit', 'reports', 'alerts', 'recommendations']
+const manageableWidgets = ['kpi_cards', 'cashflow_trend', 'expense_breakdown', 'cashflow_forecast', 'top_customers', 'loans', 'alerts', 'recommendations', 'credit_health']
 
 const fallbackSummary: Summary = {
   business: { id: 1, business_name: 'ABC Enterprises Ltd', sector: 'SME Account' },
@@ -181,6 +214,44 @@ const fallbackRecommendations: Recommendation[] = [
   { id: 2, category: 'Expenses', priority: 'medium', title: 'Review inventory purchases', description: 'Inventory costs are above the recent average and should be reviewed before restocking.', is_completed: false },
 ]
 
+function isGlobalAdmin(user: User | null) {
+  return user ? ['super_admin', 'bank_admin', 'admin'].includes(user.role) : false
+}
+
+function hasPermission(user: User | null, permission?: string) {
+  if (!permission) return true
+  if (!user) return false
+  if (isGlobalAdmin(user)) return true
+  if (!user.permissions || user.permissions.length === 0) return false
+  return user.permissions.includes(permission)
+}
+
+function canSeeView(user: User | null, settings: TenantSettings | null | undefined, item: { key: ViewKey }) {
+  if (item.key === 'admin') return isGlobalAdmin(user)
+  return hasPermission(user, viewPermissions[item.key]) && featureEnabled(settings, featureForView[item.key])
+}
+
+function featureEnabled(settings: TenantSettings | null | undefined, feature?: string) {
+  if (!feature) return true
+  if (!settings?.enabled_features || settings.enabled_features.length === 0) return true
+  return settings.enabled_features.includes(feature)
+}
+
+function safeAssetUrl(value?: string | null) {
+  if (!value) return ''
+  return value.startsWith('http') || value.startsWith('/') ? value : `/${value}`
+}
+
+
+function apiMessage(error: unknown, fallback: string) {
+  const response = (error as { response?: { status?: number; data?: { message?: string } } }).response
+  if (!response) return 'Unable to reach the Laravel API. Confirm the server is running.'
+  if (response.data?.message) return response.data.message
+  if (response.status === 401) return 'Your session expired. Log in again.'
+  if (response.status === 403) return 'Your account does not have access to this tenant, branch, or feature.'
+  return fallback
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('cashcred_token'))
   const [user, setUser] = useState<User | null>(() => {
@@ -189,31 +260,114 @@ function App() {
   })
   const [view, setView] = useState<ViewKey>('dashboard')
   const [selectedBusiness, setSelectedBusiness] = useState<string>('')
+  const [selectedBranch, setSelectedBranch] = useState<string>('')
   const [data, setData] = useState<AppData>(emptyData)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState<DateFilters>(defaultFilters)
   const [filterDraft, setFilterDraft] = useState<DateFilters>(defaultFilters)
   const [downloadLoading, setDownloadLoading] = useState(false)
+  const [sessionReady, setSessionReady] = useState(!token)
 
-  const query = selectedBusiness ? { business_id: selectedBusiness } : undefined
+  const selectedBusinessProfile = useMemo(() => {
+    const summaryBusiness = data.summary?.business ?? null
+    if (summaryBusiness && (!selectedBusiness || String(summaryBusiness.id) === selectedBusiness)) return summaryBusiness
+    return data.businesses.find((business) => String(business.id) === selectedBusiness) ?? summaryBusiness ?? data.businesses[0] ?? null
+  }, [data.businesses, data.summary?.business, selectedBusiness])
+  const selectedTenant = isGlobalAdmin(user) ? (selectedBusinessProfile?.tenant ?? user?.active_tenant ?? null) : (user?.active_tenant ?? null)
+  const tenantSettings = selectedTenant?.settings
+  const visibleNavItems = navItems.filter((item) => canSeeView(user, tenantSettings, item))
+  const activeTenantBranches = useMemo(() => isGlobalAdmin(user) ? selectedTenant?.branches ?? [] : user?.active_tenant?.branches ?? [], [selectedTenant?.branches, user])
+  const branchLocked = Boolean(user?.active_branch?.id)
+  const queryBranch = selectedBranch
+  const query = selectedBusiness || queryBranch ? { ...(selectedBusiness ? { business_id: selectedBusiness } : {}), ...(queryBranch ? { branch_id: queryBranch } : {}) } : undefined
 
-  const buildParams = useCallback((nextBusiness = selectedBusiness, nextFilters = filters) => {
+  useEffect(() => {
+    if (!visibleNavItems.some((item) => item.key === view)) {
+      setView('dashboard')
+    }
+  }, [view, visibleNavItems])
+
+  useEffect(() => {
+    if (user?.active_branch?.id) {
+      setSelectedBranch(String(user.active_branch.id))
+      return
+    }
+    if (selectedBranch && !activeTenantBranches.some((branch) => String(branch.id) === selectedBranch)) {
+      setSelectedBranch('')
+    }
+  }, [activeTenantBranches, selectedBranch, user?.active_branch?.id])
+
+  useEffect(() => {
+    if (!tenantSettings) return
+    const root = document.documentElement
+    root.style.setProperty('--tenant-primary', tenantSettings.primary_color || '#01152d')
+    root.style.setProperty('--tenant-secondary', tenantSettings.secondary_color || '#059669')
+    root.style.setProperty('--tenant-accent', tenantSettings.accent_color || '#2563eb')
+    const faviconUrl = safeAssetUrl(tenantSettings.favicon_path || tenantSettings.logo_path)
+    if (faviconUrl) {
+      let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+      if (!link) {
+        link = document.createElement('link')
+        link.rel = 'icon'
+        document.head.appendChild(link)
+      }
+      link.href = faviconUrl
+    }
+    document.title = `${tenantSettings.display_name || selectedTenant?.name || 'CashCred360'} | CashCred360`
+  }, [selectedTenant?.name, tenantSettings])
+
+  useEffect(() => {
+    if (!token) {
+      setSessionReady(true)
+      return
+    }
+    let cancelled = false
+    setSessionReady(false)
+    api.get<User>('/auth/me')
+      .then((response) => {
+        if (cancelled) return
+        localStorage.setItem('cashcred_user', JSON.stringify(response.data))
+        setUser(response.data)
+      })
+      .catch(() => {
+        if (cancelled) return
+        localStorage.removeItem('cashcred_token')
+        localStorage.removeItem('cashcred_user')
+        setToken(null)
+        setUser(null)
+      })
+      .finally(() => {
+        if (!cancelled) setSessionReady(true)
+      })
+    return () => { cancelled = true }
+  }, [token])
+
+  const buildParams = useCallback((nextBusiness = selectedBusiness, nextFilters = filters, nextBranch = selectedBranch) => {
     const params: Record<string, string> = {}
     if (nextBusiness) params.business_id = nextBusiness
+    if (nextBranch) params.branch_id = nextBranch
     if (nextFilters.date_from) params.date_from = nextFilters.date_from
     if (nextFilters.date_to) params.date_to = nextFilters.date_to
     return Object.keys(params).length > 0 ? params : undefined
-  }, [filters, selectedBusiness])
+  }, [filters, selectedBranch, selectedBusiness])
 
-  const loadData = useCallback(async (nextBusiness = selectedBusiness, nextFilters = filters) => {
+  const loadData = useCallback(async (nextBusiness = selectedBusiness, nextFilters = filters, nextBranch = selectedBranch) => {
     if (!token) return
     setLoading(true)
     setError('')
     try {
-      const params = buildParams(nextBusiness, nextFilters)
-      const [businesses, summary, trends, breakdown, loanProgress, transactions, invoices, loans, alerts, recommendations, credit] = await Promise.all([
-        api.get<BusinessProfile[]>('/businesses'),
+      const businessesResponse = await api.get<BusinessProfile[]>('/businesses')
+      const businessList = businessesResponse.data
+      const requestedBusiness = nextBusiness || selectedBusiness
+      const safeBusiness = requestedBusiness && businessList.some((business) => String(business.id) === String(requestedBusiness))
+        ? String(requestedBusiness)
+        : String(businessList[0]?.id ?? '')
+      const safeBusinessProfile = businessList.find((business) => String(business.id) === safeBusiness)
+      const availableBranches = isGlobalAdmin(user) ? safeBusinessProfile?.tenant?.branches ?? [] : user?.active_tenant?.branches ?? []
+      const safeBranch = nextBranch && availableBranches.some((branch) => String(branch.id) === String(nextBranch)) ? String(nextBranch) : ''
+      const params = buildParams(safeBusiness, nextFilters, safeBranch)
+      const [summary, trends, breakdown, loanProgress, transactions, invoices, loans, alerts, recommendations, credit] = await Promise.all([
         api.get<Summary>('/dashboard/summary', { params }),
         api.get<TrendPoint[]>('/dashboard/cashflow-trends', { params }),
         api.get<BreakdownPoint[]>('/dashboard/expense-breakdown', { params }),
@@ -225,11 +379,11 @@ function App() {
         api.get<Recommendation[]>('/recommendations', { params }),
         api.get<CreditHealth>('/credit-health', { params }),
       ])
-      const firstBusiness = businesses.data[0]
-      const activeBusiness = nextBusiness || String(summary.data.business?.id ?? firstBusiness?.id ?? '')
+      const activeBusiness = String(summary.data.business?.id ?? safeBusiness)
       if (activeBusiness && activeBusiness !== selectedBusiness) setSelectedBusiness(activeBusiness)
+      if (safeBranch !== selectedBranch) setSelectedBranch(safeBranch)
       setData({
-        businesses: businesses.data,
+        businesses: businessList,
         summary: summary.data,
         trends: trends.data,
         breakdown: breakdown.data,
@@ -241,20 +395,30 @@ function App() {
         recommendations: recommendations.data,
         credit: credit.data,
       })
-    } catch {
-      setError('Unable to load financial data. Confirm the Laravel API is running and seeded.')
+    } catch (error) {
+      setError(apiMessage(error, 'Unable to load financial data for the selected tenant, branch, and date range.'))
     } finally {
       setLoading(false)
     }
-  }, [buildParams, filters, selectedBusiness, token])
+  }, [buildParams, filters, selectedBranch, selectedBusiness, token, user])
 
   useEffect(() => {
-    if (token) void loadData()
-  }, [loadData, token])
+    if (token && sessionReady) void loadData()
+  }, [loadData, sessionReady, token])
+
+  function resetWorkspaceState() {
+    setSelectedBusiness('')
+    setSelectedBranch('')
+    setData(emptyData)
+    setError('')
+    setView('dashboard')
+  }
 
   function handleLogin(nextToken: string, nextUser: User) {
     localStorage.setItem('cashcred_token', nextToken)
     localStorage.setItem('cashcred_user', JSON.stringify(nextUser))
+    resetWorkspaceState()
+    setSessionReady(false)
     setToken(nextToken)
     setUser(nextUser)
   }
@@ -264,13 +428,14 @@ function App() {
     localStorage.removeItem('cashcred_user')
     setToken(null)
     setUser(null)
-    setData(emptyData)
+    setSessionReady(true)
+    resetWorkspaceState()
   }
 
   function applyFilters() {
     setFilters(filterDraft)
     if (filters.date_from === filterDraft.date_from && filters.date_to === filterDraft.date_to) {
-      void loadData(selectedBusiness, filterDraft)
+      void loadData(selectedBusiness, filterDraft, selectedBranch)
     }
   }
 
@@ -278,7 +443,7 @@ function App() {
     setFilterDraft(defaultFilters)
     setFilters(defaultFilters)
     if (!filters.date_from && !filters.date_to) {
-      void loadData(selectedBusiness, defaultFilters)
+      void loadData(selectedBusiness, defaultFilters, selectedBranch)
     }
   }
 
@@ -298,8 +463,8 @@ function App() {
       link.click()
       link.remove()
       URL.revokeObjectURL(url)
-    } catch {
-      setError('Unable to download report. Confirm the API is running and try again.')
+    } catch (error) {
+      setError(apiMessage(error, 'Unable to download report for the selected tenant, branch, and date range.'))
     } finally {
       setDownloadLoading(false)
     }
@@ -307,16 +472,17 @@ function App() {
 
   if (!token || !user) return <AuthScreen onLogin={handleLogin} />
 
-  const activeBusinessName = data.summary?.business?.business_name ?? user.business_profile?.business_name ?? fallbackSummary.business?.business_name ?? 'ABC Enterprises Ltd'
-  const activeBusinessType = data.summary?.business?.sector ?? user.business_profile?.sector ?? (user.role === 'sme' ? 'SME Account' : 'Bank Admin')
+  const activeBusinessName = tenantSettings?.display_name || selectedBusinessProfile?.business_name || selectedTenant?.name || user.business_profile?.business_name || fallbackSummary.business?.business_name || 'ABC Enterprises Ltd'
+  const activeBusinessType = selectedBusinessProfile?.sector ?? user.business_profile?.sector ?? (isGlobalAdmin(user) ? 'Super Admin' : user.role === 'sme' ? 'SME Account' : 'Admin')
   const filterChanged = filters.date_from !== defaultFilters.date_from || filters.date_to !== defaultFilters.date_to || filterDraft.date_from !== defaultFilters.date_from || filterDraft.date_to !== defaultFilters.date_to
+  const appStyle: CSSProperties = tenantSettings?.background_image_path ? { backgroundImage: `linear-gradient(rgba(244,250,246,0.92), rgba(244,250,246,0.92)), url(${safeAssetUrl(tenantSettings.background_image_path)})`, backgroundSize: 'cover', backgroundAttachment: 'fixed' } : {}
 
   return (
-    <div className="min-h-screen bg-[#f4faf6] text-[#07162d]">
+    <div className="min-h-screen bg-[#f4faf6] text-[#07162d]" style={appStyle}>
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-[276px] flex-col bg-[#01152d] text-white lg:flex">
-        <Brand businessName={activeBusinessName} businessType={activeBusinessType} />
+        <Brand businessName={activeBusinessName} businessType={activeBusinessType} settings={tenantSettings} />
         <nav className="flex-1 space-y-1 px-4 py-5">
-          {navItems.map((item) => <NavButton key={item.key} item={item} active={view === item.key} onClick={() => setView(item.key)} />)}
+          {visibleNavItems.map((item) => <NavButton key={item.key} item={item} active={view === item.key} onClick={() => setView(item.key)} />)}
         </nav>
         <SidebarGuidance />
       </aside>
@@ -325,7 +491,7 @@ function App() {
         <header className="sticky top-0 z-20 border-b border-[#dfe8e4] bg-[#f8fbfa]/95 px-4 py-4 backdrop-blur lg:px-7">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <h1 className="text-2xl font-semibold tracking-normal text-[#07162d]">{titleFor(view)}</h1>
+              <h1 className="text-2xl font-semibold tracking-normal text-[#07162d]">{titleFor(view, visibleNavItems)}</h1>
               <p className="mt-1 text-sm text-slate-500">{view === 'dashboard' ? 'Overview of your business financial health' : 'Manage your business financial activity'}</p>
             </div>
             <div className="grid w-full gap-2 sm:grid-cols-2 xl:flex xl:w-auto xl:flex-wrap xl:items-center xl:justify-end">
@@ -359,7 +525,10 @@ function App() {
                   className="h-10 w-full rounded-lg border border-[#d7e4df] bg-white px-3 text-sm font-medium text-slate-700 shadow-sm sm:w-auto xl:w-auto"
                   value={selectedBusiness}
                   onChange={(event) => {
-                    setSelectedBusiness(event.target.value)
+                    const nextBusiness = event.target.value
+                    setSelectedBusiness(nextBusiness)
+                    setSelectedBranch('')
+                    void loadData(nextBusiness, filters, '')
                   }}
                 >
                   {data.businesses.map((business) => <option key={business.id} value={business.id}>{business.business_name}</option>)}
@@ -368,6 +537,18 @@ function App() {
                 <div className="inline-flex h-10 w-full min-w-0 items-center gap-2 rounded-lg border border-[#d7e4df] bg-white px-3 text-sm font-medium text-slate-700 shadow-sm sm:w-auto xl:w-auto">
                   <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" /> <span className="truncate">{activeBusinessName}</span>
                 </div>
+              )}
+              {activeTenantBranches.length > 0 && (
+                <select
+                  className="h-10 w-full rounded-lg border border-[#d7e4df] bg-white px-3 text-sm font-medium text-slate-700 shadow-sm disabled:bg-slate-50 disabled:text-slate-500 sm:w-auto xl:w-auto"
+                  value={selectedBranch}
+                  disabled={branchLocked}
+                  onChange={(event) => setSelectedBranch(event.target.value)}
+                  aria-label="Filter dashboard by branch"
+                >
+                  {!branchLocked && <option value="">All branches</option>}
+                  {activeTenantBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                </select>
               )}
               <button className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[#d7e4df] bg-white px-3 text-sm font-medium text-slate-700 shadow-sm sm:w-auto xl:w-auto" onClick={() => void loadData()} type="button" aria-label="Refresh dashboard data">
                 <RefreshCw size={16} /> <span>Refresh</span>
@@ -378,7 +559,7 @@ function App() {
             </div>
           </div>
           <div className="mt-4 flex gap-2 overflow-x-auto lg:hidden">
-            {navItems.map((item) => <NavButton key={item.key} item={item} active={view === item.key} onClick={() => setView(item.key)} compact />)}
+            {visibleNavItems.map((item) => <NavButton key={item.key} item={item} active={view === item.key} onClick={() => setView(item.key)} compact />)}
           </div>
         </header>
 
@@ -394,6 +575,7 @@ function App() {
           {view === 'reports' && <Reports data={data} />}
           {view === 'alerts' && <AlertsView alerts={data.alerts} reload={() => loadData()} />}
           {view === 'recommendations' && <RecommendationsView recommendations={data.recommendations} credit={data.credit} reload={() => loadData()} />}
+          {view === 'admin' && isGlobalAdmin(user) && <AdminWorkspace user={user} onUserChange={(nextUser) => { setUser(nextUser); localStorage.setItem('cashcred_user', JSON.stringify(nextUser)) }} />}
         </div>
       </main>
     </div>
@@ -401,21 +583,28 @@ function App() {
 }
 function AuthScreen({ onLogin }: { onLogin: (token: string, user: User) => void }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
-  const [form, setForm] = useState({ name: '', email: 'sme.owner@cashcred.test', password: 'password123', business_name: 'Savanna Office Supplies', sector: 'Wholesale and Retail' })
+  const [form, setForm] = useState({ name: '', email: '', password: '', business_name: '', sector: '' })
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [remember, setRemember] = useState(true)
   const [showPassword, setShowPassword] = useState(false)
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     setError('')
+    setNotice('')
     try {
       const endpoint = mode === 'login' ? '/auth/login' : '/auth/register'
       const payload = mode === 'login' ? { email: form.email, password: form.password } : { ...form, role: 'sme' }
-      const response = await api.post<{ token: string; user: User }>(endpoint, payload)
-      onLogin(response.data.token, response.data.user)
-    } catch {
-      setError('Authentication failed. Use the seeded demo account or create a new SME account.')
+      const response = await api.post<{ token?: string; user?: User; message?: string }>(endpoint, payload)
+      if (response.data.token && response.data.user) {
+        onLogin(response.data.token, response.data.user)
+        return
+      }
+      setNotice(response.data.message || 'Registration submitted. You can log in after super admin approval.')
+      setMode('login')
+    } catch (error) {
+      setError(apiMessage(error, 'Authentication failed. Use the seeded demo account or create a new SME account.'))
     }
   }
 
@@ -436,17 +625,17 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, user: User) => void 
               </div>
             </div>
 
-            <h1 className="max-w-2xl text-[4.45rem] font-semibold leading-[0.98] tracking-normal text-[#081629]">
+            <h1 className="max-w-2xl text-[2.225rem] font-semibold leading-[0.98] tracking-normal text-[#081629]">
               SME Cashflow &<br />Credit Health Assistant
             </h1>
             <p className="mt-8 max-w-3xl text-[1.08rem] leading-8 text-slate-600">
               Monitor income, expenses, receivables, loan obligations, repayment capacity, and credit readiness from one banking-grade analytics workspace.
             </p>
 
-            <div className="mt-10 grid max-w-3xl grid-cols-3 gap-4">
-              <AuthFeature icon={LineChart} title="Cashflow trends" description="Track inflows, outflows and cash position." />
-              <AuthFeature icon={ShieldCheck} title="Credit risk scoring" description="Understand what improves credit health." />
-              <AuthFeature icon={Target} title="Loan readiness" description="Assess eligibility and repayment capacity." />
+            <div className="mt-10 grid max-w-xl grid-cols-3 gap-2">
+              <AuthFeature icon={LineChart} title="Cashflow trends" description="Track cash flows" />
+              <AuthFeature icon={ShieldCheck} title="Credit risk scoring" description="Improve credit health" />
+              <AuthFeature icon={Target} title="Loan readiness" description="Assess repayment readiness" />
             </div>
 
             <div className="mt-10 grid max-w-3xl grid-cols-[1.1fr_0.9fr] gap-4">
@@ -502,7 +691,7 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, user: User) => void 
                 <p className="text-xs font-medium text-slate-500">Banking-grade analytics for SMEs</p>
               </div>
             </div>
-            <h1 className="text-3xl font-semibold leading-tight tracking-normal text-[#081629]">SME Cashflow & Credit Health Assistant</h1>
+            <h1 className="text-[0.9375rem] font-semibold leading-tight tracking-normal text-[#081629]">SME Cashflow & Credit Health Assistant</h1>
           </div>
 
           <div className="mb-6 grid grid-cols-2 rounded-2xl bg-slate-100 p-1.5">
@@ -511,6 +700,7 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, user: User) => void 
           </div>
 
           {error && <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>}
+          {notice && <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{notice}</div>}
           {mode === 'register' && <AuthInput label="Owner name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} required />}
           <AuthInput label="Email" icon={Mail} value={form.email} onChange={(value) => setForm({ ...form, email: value })} type="email" required />
           <AuthInput
@@ -552,11 +742,6 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, user: User) => void 
             <span className="h-px flex-1 bg-slate-200" />
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-6 text-slate-600">
-            <p><span className="font-semibold text-slate-800">Demo SME:</span> sme.owner@cashcred.test / password123</p>
-            <p><span className="font-semibold text-slate-800">Bank admin:</span> bank.admin@cashcred.test / password123</p>
-          </div>
-
           <div className="mt-5 flex items-start gap-3 rounded-2xl bg-emerald-50 px-4 py-4 text-sm leading-6 text-slate-600">
             <ShieldCheck className="mt-0.5 shrink-0 text-emerald-600" size={19} />
             <p>Your data is encrypted and secure with enterprise-grade protection.</p>
@@ -588,7 +773,7 @@ function AuthCashflowPreview() {
             <g key={index}>
               <rect x={x} y={124 - group.outflow} width="13" height={group.outflow} rx="4" fill="#dbeafe" />
               <rect x={x + 17} y={124 - group.inflow} width="13" height={group.inflow} rx="4" fill="#16a34a" />
-              <rect x={x + 34} y={124 - group.net} width="13" height={group.net} rx="4" fill="#0f172a" />
+              <rect x={x + 34} y={124 - group.net} width="13" height={group.net} rx="4" fill="#dc2626" />
             </g>
           )
         })}
@@ -599,10 +784,10 @@ function AuthCashflowPreview() {
 
 function AuthFeature({ icon: Icon, title, description }: { icon: typeof LineChart; title: string; description: string }) {
   return (
-    <div className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-lg shadow-slate-200/60">
-      <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Icon size={20} /></div>
-      <h3 className="text-sm font-bold text-[#0f172a]">{title}</h3>
-      <p className="mt-2 text-xs leading-5 text-slate-500">{description}</p>
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-3 shadow-md shadow-slate-200/40">
+      <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Icon size={16} /></div>
+      <h3 className="text-xs font-bold text-[#0f172a]">{title}</h3>
+      <p className="mt-1 text-[11px] leading-4 text-slate-500">{description}</p>
     </div>
   )
 }
@@ -973,7 +1158,7 @@ function DashboardRecommendation({ recommendation }: { recommendation: Recommend
 function Transactions({ data, query, reload }: { data: AppData; query?: object; reload: () => void }) {
   return (
     <ModuleLayout title="Transactions" action={<TransactionForm query={query} reload={reload} />}>
-      <DataTable headers={['Date', 'Type', 'Category', 'Description', 'Amount', 'Status']} rows={data.transactions.map((item) => [dateOnly(item.transaction_date), item.type, item.category, item.description ?? '-', currency.format(item.amount), item.status])} />
+      <DataTable headers={['Date', 'Type', 'Category', 'Description', 'Amount', 'Status']} rows={data.transactions.map((item) => [dateOnly(item.transaction_date), item.type, item.category, item.description ?? '-', currency.format(item.amount), item.status])} emptyLabel="No transactions match the selected tenant, branch, and date range" />
     </ModuleLayout>
   )
 }
@@ -1003,7 +1188,7 @@ function Expenses({ data }: { data: AppData }) {
         <ExpensePie data={filteredBreakdown} />
       </ChartPanel>
       <ModuleLayout title={`Expense ledger ${currency.format(filteredTotal)}`}>
-        <DataTable headers={['Date', 'Category', 'Description', 'Amount', 'Status']} rows={filteredExpenses.map((item) => [dateOnly(item.transaction_date), item.category, item.description ?? '-', currency.format(item.amount), item.status])} />
+        <DataTable headers={['Date', 'Category', 'Description', 'Amount', 'Status']} rows={filteredExpenses.map((item) => [dateOnly(item.transaction_date), item.category, item.description ?? '-', currency.format(item.amount), item.status])} emptyLabel="No expenses match the selected tenant, branch, category, and date range" />
       </ModuleLayout>
     </div>
   )
@@ -1012,7 +1197,7 @@ function Expenses({ data }: { data: AppData }) {
 function Invoices({ data, query, reload }: { data: AppData; query?: object; reload: () => void }) {
   return (
     <ModuleLayout title="Invoices and receivables" action={<InvoiceForm query={query} reload={reload} />}>
-      <DataTable headers={['Invoice', 'Customer', 'Amount', 'Issued', 'Due', 'Status']} rows={data.invoices.map((item) => [item.invoice_number, item.customer_name, currency.format(item.amount), dateOnly(item.issue_date), dateOnly(item.due_date), item.status])} />
+      <DataTable headers={['Invoice', 'Customer', 'Amount', 'Issued', 'Due', 'Status']} rows={data.invoices.map((item) => [item.invoice_number, item.customer_name, currency.format(item.amount), dateOnly(item.issue_date), dateOnly(item.due_date), item.status])} emptyLabel="No invoices match the selected tenant, branch, and date range" />
     </ModuleLayout>
   )
 }
@@ -1020,7 +1205,7 @@ function Invoices({ data, query, reload }: { data: AppData; query?: object; relo
 function Loans({ data, query, reload }: { data: AppData; query?: object; reload: () => void }) {
   return (
     <ModuleLayout title="Loans and obligations" action={<LoanForm query={query} reload={reload} />}>
-      <DataTable headers={['Lender', 'Product', 'Outstanding', 'Installment', 'Due date', 'Progress', 'Status']} rows={data.loans.map((item) => [item.lender, item.product_name ?? '-', currency.format(item.outstanding_balance), currency.format(item.monthly_installment), dateOnly(item.next_due_date), `${item.repayment_progress}%`, item.status])} />
+      <DataTable headers={['Lender', 'Product', 'Outstanding', 'Installment', 'Due date', 'Progress', 'Status']} rows={data.loans.map((item) => [item.lender, item.product_name ?? '-', currency.format(item.outstanding_balance), currency.format(item.monthly_installment), dateOnly(item.next_due_date), `${item.repayment_progress}%`, item.status])} emptyLabel="No loans match the selected tenant, branch, and date range" />
     </ModuleLayout>
   )
 }
@@ -1291,13 +1476,216 @@ function LoanForm({ query, reload }: { query?: object; reload: () => void }) {
   return <InlineForm onSubmit={submit}><SmallInput placeholder="Lender" value={form.lender} onChange={(value) => setForm({ ...form, lender: value })} /><SmallInput placeholder="Product" value={form.product_name} onChange={(value) => setForm({ ...form, product_name: value })} /><SmallInput placeholder="Outstanding" value={form.outstanding_balance} onChange={(value) => setForm({ ...form, outstanding_balance: value, principal_amount: value })} type="number" /><SmallInput placeholder="Installment" value={form.monthly_installment} onChange={(value) => setForm({ ...form, monthly_installment: value })} type="number" /><SubmitButton /></InlineForm>
 }
 
-function Brand({ businessName, businessType }: { businessName: string; businessType: string }) {
+
+function AdminWorkspace({ user, onUserChange }: { user: User; onUserChange: (user: User) => void }) {
+  const isSuper = isGlobalAdmin(user)
+  const [tenants, setTenants] = useState<Tenant[]>([])
+  const [activeTenantId, setActiveTenantId] = useState<number | ''>(user.active_tenant?.id ?? '')
+  const [settings, setSettings] = useState<TenantSettings | null>(user.active_tenant?.settings ?? null)
+  const [branches, setBranches] = useState<Branch[]>([])
+  const [roles, setRoles] = useState<Role[]>([])
+  const [memberships, setMemberships] = useState<TenantMembership[]>([])
+  const [message, setMessage] = useState('')
+  const [newTenant, setNewTenant] = useState({ name: '', sector: '', location: '', owner_name: '', owner_email: '', owner_password: '' })
+  const [newBranch, setNewBranch] = useState({ name: '', code: '', location: '' })
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role_id: '', branch_id: '' })
+
+  const tenantPrefix = isSuper && activeTenantId ? `/admin/tenants/${activeTenantId}` : '/tenant'
+
+  const refreshContext = useCallback(async () => {
+    const response = await api.get<User>('/auth/me')
+    onUserChange(response.data)
+  }, [onUserChange])
+
+  const loadAdmin = useCallback(async () => {
+    setMessage('')
+    const requests: Promise<unknown>[] = []
+    if (isSuper) {
+      requests.push(api.get<Tenant[]>('/admin/tenants').then((response) => {
+        setTenants(response.data)
+        if (!activeTenantId && response.data[0]) setActiveTenantId(response.data[0].id)
+      }))
+    }
+    if (!isSuper || activeTenantId) {
+      requests.push(api.get<TenantSettings>(`${tenantPrefix}/settings`).then((response) => setSettings(response.data)))
+      requests.push(api.get<Branch[]>(`${tenantPrefix}/branches`).then((response) => setBranches(response.data)))
+      requests.push(api.get<Role[]>(`${tenantPrefix}/roles`).then((response) => setRoles(response.data)))
+      requests.push(api.get<TenantMembership[]>(`${tenantPrefix}/users`).then((response) => setMemberships(response.data)))
+    }
+    await Promise.all(requests)
+  }, [activeTenantId, isSuper, tenantPrefix])
+
+  useEffect(() => {
+    void loadAdmin().catch(() => setMessage('Unable to load tenant administration data.'))
+  }, [loadAdmin])
+
+  async function saveSettings(event: FormEvent) {
+    event.preventDefault()
+    if (!settings) return
+    await api.put(`${tenantPrefix}/settings`, settings)
+    await refreshContext()
+    await loadAdmin()
+    setMessage('Tenant settings saved.')
+  }
+
+  async function createTenant(event: FormEvent) {
+    event.preventDefault()
+    const response = await api.post<Tenant>('/admin/tenants', newTenant)
+    setNewTenant({ name: '', sector: '', location: '', owner_name: '', owner_email: '', owner_password: '' })
+    setActiveTenantId(response.data.id)
+    await loadAdmin()
+    setMessage('Tenant account created.')
+  }
+
+  async function createBranch(event: FormEvent) {
+    event.preventDefault()
+    await api.post(`${tenantPrefix}/branches`, newBranch)
+    setNewBranch({ name: '', code: '', location: '' })
+    await loadAdmin()
+    setMessage('Branch created.')
+  }
+
+  async function createUser(event: FormEvent) {
+    event.preventDefault()
+    const roleId = newUser.role_id || (roles[0] ? String(roles[0].id) : '')
+    if (!roleId) {
+      setMessage('Create a role before assigning user access.')
+      return
+    }
+    await api.post(`${tenantPrefix}/users`, { ...newUser, role_id: Number(roleId), branch_id: newUser.branch_id ? Number(newUser.branch_id) : null })
+    setNewUser({ name: '', email: '', password: '', role_id: roles[0] ? String(roles[0].id) : '', branch_id: '' })
+    await loadAdmin()
+    setMessage('User access saved.')
+  }
+
+  async function updateTenantStatus(status: 'active' | 'pending' | 'suspended') {
+    if (!activeTenantId) return
+    await api.put(`/admin/tenants/${activeTenantId}`, { status })
+    await loadAdmin()
+    await refreshContext()
+    setMessage(status === 'suspended' ? 'Tenant account closed.' : status === 'active' ? 'Tenant account activated.' : 'Tenant account marked pending.')
+  }
+
+  async function updateMembershipStatus(membership: TenantMembership, status: 'active' | 'pending' | 'suspended') {
+    if (!membership.id) return
+    await api.put(`/admin/users/${membership.id}`, { status })
+    await loadAdmin()
+    setMessage(status === 'active' ? 'User approved and access granted.' : status === 'suspended' ? 'User access suspended.' : 'User moved to pending approval.')
+  }
+
+  function toggleList(field: 'enabled_features' | 'enabled_widgets', value: string) {
+    if (!settings) return
+    const current = settings[field] || []
+    const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value]
+    setSettings({ ...settings, [field]: next, widget_order: field === 'enabled_widgets' ? next : settings.widget_order })
+  }
+
+  return (
+    <div className="grid gap-5">
+      {message && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">{message}</div>}
+      {isSuper && (
+        <ModuleLayout title="System accounts" action={<select className="h-10 rounded-lg border border-[#d7e4df] bg-white px-3 text-sm" value={activeTenantId} onChange={(event) => setActiveTenantId(Number(event.target.value))}>{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name} ({tenant.status})</option>)}</select>}>
+          {activeTenantId && <div className="mb-4 flex flex-wrap gap-2">
+            <button type="button" onClick={() => updateTenantStatus('active')} className="inline-flex h-9 items-center rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white">Activate Account</button>
+            <button type="button" onClick={() => updateTenantStatus('pending')} className="inline-flex h-9 items-center rounded-md border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-800">Mark Pending</button>
+            <button type="button" onClick={() => updateTenantStatus('suspended')} className="inline-flex h-9 items-center rounded-md border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700">Close Account</button>
+          </div>}
+          <form onSubmit={createTenant} className="grid gap-3 md:grid-cols-3">
+            <SmallInput value={newTenant.name} onChange={(value) => setNewTenant({ ...newTenant, name: value })} placeholder="SME name" />
+            <SmallInput value={newTenant.owner_name} onChange={(value) => setNewTenant({ ...newTenant, owner_name: value })} placeholder="Owner name" />
+            <SmallInput value={newTenant.owner_email} onChange={(value) => setNewTenant({ ...newTenant, owner_email: value })} placeholder="Owner email" type="email" />
+            <SmallInput value={newTenant.owner_password} onChange={(value) => setNewTenant({ ...newTenant, owner_password: value })} placeholder="Owner password" type="password" />
+            <SmallInput value={newTenant.sector} onChange={(value) => setNewTenant({ ...newTenant, sector: value })} placeholder="Sector" />
+            <SmallInput value={newTenant.location} onChange={(value) => setNewTenant({ ...newTenant, location: value })} placeholder="Location" />
+            <button type="submit" className="inline-flex h-10 items-center justify-center rounded-md bg-[#01152d] px-3 text-sm font-semibold text-white">Create Tenant</button>
+          </form>
+        </ModuleLayout>
+      )}
+
+      {settings && isSuper && (
+        <ModuleLayout title="Tenant branding, features and widgets">
+          <form onSubmit={saveSettings} className="grid gap-5">
+            <div className="grid gap-3 md:grid-cols-3">
+              <SmallInput value={settings.display_name || ''} onChange={(value) => setSettings({ ...settings, display_name: value })} placeholder="Display name" />
+              <SmallInput value={settings.logo_path || ''} onChange={(value) => setSettings({ ...settings, logo_path: value })} placeholder="Logo URL or path" />
+              <SmallInput value={settings.favicon_path || ''} onChange={(value) => setSettings({ ...settings, favicon_path: value })} placeholder="Favicon URL or path" />
+              <SmallInput value={settings.background_image_path || ''} onChange={(value) => setSettings({ ...settings, background_image_path: value })} placeholder="Background image URL or path" />
+              <SmallInput value={settings.primary_color} onChange={(value) => setSettings({ ...settings, primary_color: value })} type="color" />
+              <SmallInput value={settings.secondary_color} onChange={(value) => setSettings({ ...settings, secondary_color: value })} type="color" />
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Checklist title="Features" items={manageableFeatures} selected={settings.enabled_features || []} onToggle={(value) => toggleList('enabled_features', value)} />
+              <Checklist title="Dashboard widgets" items={manageableWidgets} selected={settings.enabled_widgets || []} onToggle={(value) => toggleList('enabled_widgets', value)} />
+            </div>
+            <button type="submit" className="inline-flex h-10 w-fit items-center rounded-md bg-[#01152d] px-4 text-sm font-semibold text-white">Save Settings</button>
+          </form>
+        </ModuleLayout>
+      )}
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <ModuleLayout title="Branches">
+          {isSuper && <form onSubmit={createBranch} className="mb-4 grid gap-2 md:grid-cols-4">
+            <SmallInput value={newBranch.name} onChange={(value) => setNewBranch({ ...newBranch, name: value })} placeholder="Branch name" />
+            <SmallInput value={newBranch.code} onChange={(value) => setNewBranch({ ...newBranch, code: value })} placeholder="Code" />
+            <SmallInput value={newBranch.location} onChange={(value) => setNewBranch({ ...newBranch, location: value })} placeholder="Location" />
+            <button type="submit" className="inline-flex h-10 items-center justify-center rounded-md bg-[#01152d] px-3 text-sm font-semibold text-white">Add Branch</button>
+          </form>}
+          <DataTable headers={['Name', 'Code', 'Location', 'Status']} rows={branches.map((branch) => [branch.name, branch.code || '-', branch.location || '-', branch.status])} />
+        </ModuleLayout>
+
+        <ModuleLayout title="Tenant users and CRUD roles">
+          {isSuper && <form onSubmit={createUser} className="mb-4 grid gap-2 md:grid-cols-2">
+            <SmallInput value={newUser.name} onChange={(value) => setNewUser({ ...newUser, name: value })} placeholder="Name" />
+            <SmallInput value={newUser.email} onChange={(value) => setNewUser({ ...newUser, email: value })} placeholder="Email" type="email" />
+            <SmallInput value={newUser.password} onChange={(value) => setNewUser({ ...newUser, password: value })} placeholder="Password" type="password" />
+            <select className="h-10 rounded-md border border-slate-300 px-3 text-sm" value={newUser.role_id || (roles[0] ? String(roles[0].id) : '')} onChange={(event) => setNewUser({ ...newUser, role_id: event.target.value })}>
+              {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+            </select>
+            <select className="h-10 rounded-md border border-slate-300 px-3 text-sm" value={newUser.branch_id} onChange={(event) => setNewUser({ ...newUser, branch_id: event.target.value })}>
+              <option value="">All branches</option>
+              {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+            </select>
+            <button type="submit" className="inline-flex h-10 items-center justify-center rounded-md bg-[#01152d] px-3 text-sm font-semibold text-white md:col-span-2">Save User Access</button>
+          </form>}
+          <DataTable headers={['User', 'Email', 'Role', 'Branch', 'Status']} rows={memberships.map((membership) => [membership.user?.name || '-', membership.user?.email || '-', membership.role?.name || '-', membership.branch?.name || 'All branches', membership.status])} />
+          {isSuper && memberships.length > 0 && <div className="mt-4 grid gap-3">
+            {memberships.map((membership) => <div key={membership.id ?? `${membership.tenant_id}-${membership.user?.id}`} className="flex flex-col gap-3 rounded-lg border border-[#dfe8e4] bg-white px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-[#07162d]">{membership.user?.name || 'Pending user'}</p>
+                <p className="text-xs text-slate-500">{membership.user?.email || '-'} · {membership.role?.name || 'No role'} · {membership.branch?.name || 'All branches'}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => updateMembershipStatus(membership, 'active')} className="h-8 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white">Approve</button>
+                <button type="button" onClick={() => updateMembershipStatus(membership, 'pending')} className="h-8 rounded-md border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-800">Pending</button>
+                <button type="button" onClick={() => updateMembershipStatus(membership, 'suspended')} className="h-8 rounded-md border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700">Suspend</button>
+              </div>
+            </div>)}
+          </div>}
+        </ModuleLayout>
+      </div>
+    </div>
+  )
+}
+
+function Checklist({ title, items, selected, onToggle }: { title: string; items: string[]; selected: string[]; onToggle: (value: string) => void }) {
+  return (
+    <div className="rounded-lg border border-[#dfe8e4] p-4">
+      <h3 className="mb-3 text-sm font-semibold text-[#07162d]">{title}</h3>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {items.map((item) => <label key={item} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selected.includes(item)} onChange={() => onToggle(item)} />{sentenceCase(item.replace(/_/g, ' '))}</label>)}
+      </div>
+    </div>
+  )
+}
+
+function Brand({ businessName, businessType, settings }: { businessName: string; businessType: string; settings?: TenantSettings | null }) {
+  const logoUrl = safeAssetUrl(settings?.logo_path)
   return (
     <div className="border-b border-white/10 px-5 py-6">
       <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 text-white ring-1 ring-white/10"><Building2 size={22} /></div>
+        <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white/10 text-white ring-1 ring-white/10">{logoUrl ? <img src={logoUrl} alt="" className="h-full w-full object-cover" /> : <Building2 size={22} />}</div>
         <div>
-          <p className="text-lg font-semibold tracking-normal text-white">CashCred360</p>
+          <p className="text-lg font-semibold tracking-normal text-white">{settings?.display_name || 'CashCred360'}</p>
           <p className="text-xs text-white/55">Banking analytics</p>
         </div>
       </div>
@@ -1353,8 +1741,8 @@ function ModuleLayout({ title, action, children }: { title: string; action?: Rea
   return <section className="rounded-2xl border border-[#dfe8e4] bg-white shadow-sm"><div className="border-b border-[#dfe8e4] p-5"><div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between"><h2 className="text-lg font-semibold tracking-normal text-[#07162d]">{title}</h2>{action}</div></div><div className="p-5">{children}</div></section>
 }
 
-function DataTable({ headers, rows }: { headers: string[]; rows: (string | number)[][] }) {
-  if (rows.length === 0) return <EmptyState label="No records yet" />
+function DataTable({ headers, rows, emptyLabel = 'No records match the selected tenant, branch, and date range' }: { headers: string[]; rows: (string | number)[][]; emptyLabel?: string }) {
+  if (rows.length === 0) return <EmptyState label={emptyLabel} />
   return <div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b border-slate-200 text-slate-500">{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-medium">{header}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={index} className="border-b border-slate-100 last:border-0">{row.map((cell, cellIndex) => <td key={cellIndex} className="whitespace-nowrap px-3 py-3">{cell}</td>)}</tr>)}</tbody></table></div>
 }
 
@@ -1391,8 +1779,8 @@ function EmptyState({ label }: { label: string }) {
   return <div className="rounded-md border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">{label}</div>
 }
 
-function titleFor(view: ViewKey) {
-  return navItems.find((item) => item.key === view)?.label ?? 'Dashboard'
+function titleFor(view: ViewKey, items = navItems) {
+  return items.find((item) => item.key === view)?.label ?? 'Dashboard'
 }
 
 function dateOnly(value?: string) {
